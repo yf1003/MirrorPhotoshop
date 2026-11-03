@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body{padding:18px;color:#ededed;background:#25282c;font-family:system-ui;font-size:13px}
+h1{font-size:24px;color:#70e7f5;margin-bottom:8px}p{line-height:1.5;color:#bbb}
+button,select{width:100%;margin-top:12px;padding:10px;background:#3a3f45;color:white;border:1px solid #555;border-radius:5px}
+button.primary{background:#70e7f5;color:#101516}#status{margin-top:18px;white-space:pre-wrap}
+</style></head><body>
+<h1>PSD Mirror</h1>
+<select id="quality"><option value="2048">流畅 · 最长边 2048 px</option><option value="4096" selected>清晰 · 最长边 4096 px</option><option value="8192">高清 · 最长边 8192 px</option></select>
+<button id="toggle" class="primary">开始实时同步</button>
+<button id="send">立即发送当前画面</button>
+<p id="status">未开始</p>
+<script src="main.js"></script>
+</body></html>

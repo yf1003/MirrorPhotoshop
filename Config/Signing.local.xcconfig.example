@@ -1,0 +1,5 @@
+// Copy to Signing.local.xcconfig, then fill in YOUR OWN team and unique bundle IDs.
+// This is a template. Do not put passwords, certificates or private keys here.
+DEVELOPMENT_TEAM =
+PSDMIRROR_IOS_BUNDLE_ID = com.yourname.psdmirror
+PSDMIRROR_MAC_BUNDLE_ID = com.yourname.psdmirror.mac

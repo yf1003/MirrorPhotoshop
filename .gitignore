@@ -1,0 +1,51 @@
+# Generated apps, caches, test images, logs, downloaded tools and plugin packages.
+/build/
+/DerivedData/
+/dist/
+node_modules/
+.npm/
+*.xcarchive/
+*.ipa
+*.app/
+*.dSYM/
+*.ccx
+
+# Xcode personal state; keep project.pbxproj and shared schemes in Git.
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Per-user signing / environment configuration and credentials.
+/Config/*.local.xcconfig
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.cer
+*.csr
+*.key
+*.pem
+*.mobileprovision
+*.provisionprofile
+
+# Runtime UXP sessions, bridge previews, and personal artwork.
+.uxprc
+PhotoshopBridge/
+psdmirror-frame.json
+*.psd
+*.psb
+
+# OS/editor/temporary files.
+.DS_Store
+.AppleDouble
+._*
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.swp
+*~

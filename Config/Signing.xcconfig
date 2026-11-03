@@ -1,0 +1,7 @@
+// Shared defaults. No Apple account or personal development team belongs here.
+DEVELOPMENT_TEAM =
+PSDMIRROR_IOS_BUNDLE_ID = com.example.psdmirror
+PSDMIRROR_MAC_BUNDLE_ID = com.example.psdmirror.mac
+
+// Each developer creates this ignored file from Signing.local.xcconfig.example.
+#include? "Signing.local.xcconfig"
