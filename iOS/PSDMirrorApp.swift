@@ -168,13 +168,16 @@ private struct PSDFileRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "doc.richtext")
+            Image(systemName: frame.artboardName == nil ? "doc.richtext" : "rectangle.dashed")
                 .font(.system(size: 22, weight: .light)).foregroundStyle(.white.opacity(0.55))
                 .frame(width: 44, height: 52)
                 .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 8) {
-                Text(frame.title).font(.system(size: 15, weight: .medium))
+                Text(frame.artboardName ?? frame.title).font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.primary).lineLimit(2).multilineTextAlignment(.leading)
+                if frame.artboardName != nil {
+                    Text(frame.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 HStack(spacing: 8) {
                     Text("\(String(frame.width)) × \(String(frame.height))")
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)

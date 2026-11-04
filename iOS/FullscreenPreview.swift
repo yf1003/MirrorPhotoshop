@@ -110,9 +110,13 @@ final class PreviewController: UIViewController, UIScrollViewDelegate, UIGesture
         loadViewIfNeeded()
         let sameID = self.frame?.id == frame?.id
         self.frame = frame
-        titleLabel.text = "  \(frame?.title ?? "等待画面")  \n  \(status)  "
-        let newVersion = frame.map { $0.id + $0.version }
-        guard newVersion != version, let image else { return }
+        titleLabel.text = "  \(frame?.previewTitle ?? "等待画面")  \n  \(status)  "
+        guard let image else {
+            imageView.image = nil; version = nil
+            return
+        }
+        let newVersion = frame.map { $0.id + ":" + $0.version }
+        guard newVersion != version else { return }
         let sameDocument = sameID && version != nil && imageView.image?.size == image.size
         let oldScale = scroll.zoomScale
         let oldOffset = scroll.contentOffset

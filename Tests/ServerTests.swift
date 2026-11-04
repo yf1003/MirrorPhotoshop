@@ -17,7 +17,10 @@ struct ServerTests {
             try bytes.write(to: root.appendingPathComponent("build/QA/actual-preview.png"))
             try check(w > 0 && h > 0 && !bytes.isEmpty, "Actual garden PSD renders: \(w) × \(h)")
         }
-        let server = MirrorServer()
+        let suite = "PSDMirror.ServerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let server = MirrorServer(defaults: defaults)
         server.start()
         server.add(urls: [fixture])
         try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -75,6 +78,42 @@ struct ServerTests {
         try check(isolatedRead == 404, "Plugin API does not expose phone preview endpoints")
         let (_, isolatedSession) = try await request("session")
         try check(isolatedSession == 404, "LAN phone API does not expose plugin handshake")
+
+        func publishBoards(_ ids: [Int], active: Int) async throws -> PluginArtboardState {
+            let update = PluginArtboards(documentID: "123", layerIDs: ids, activeLayerID: active)
+            let (data, status) = try await pluginRequest("artboards", token: pluginSession.key, method: "POST", body: JSONEncoder().encode(update))
+            try check(status == 200, "Artboard list and selection accepted")
+            return try JSONDecoder().decode(PluginArtboardState.self, from: data)
+        }
+        let pending = try await publishBoards([11, 12], active: 11)
+        try check(pending.missingLayerIDs == [11, 12], "Plugin can discover previews that need uploading")
+        for (id, name) in [(11, "商店"), (12, "详情")] {
+            let doc = PushFrame(id: "123", title: "示例.psd", width: 80, height: 160, jpeg: png.base64EncodedString())
+            let push = PushArtboard(document: doc, layerID: id, name: name)
+            let (_, status) = try await pluginRequest("artboard", token: pluginSession.key, method: "POST", body: JSONEncoder().encode(push))
+            try check(status == 200, "Individual artboard uploaded")
+        }
+        let ready = try await publishBoards([11, 12], active: 11)
+        try check(ready.missingLayerIDs.isEmpty, "Both artboard images are cached")
+        let (boardsData, _) = try await request("state")
+        let boards = try JSONDecoder().decode(MirrorState.self, from: boardsData)
+        try check(boards.activeID == "artboard-123-11" && boards.frames.filter { $0.title == "示例.psd" }.map(\.artboardName) == ["商店", "详情"],
+                  "Phone receives separate named entries from the same PSD")
+        let (boardImage, boardStatus) = try await request("frame/artboard-123-12")
+        try check(boardStatus == 200 && boardImage == png, "Artboard image fetched by its stable ID")
+        _ = try await publishBoards([11, 12], active: 12)
+        let (selectionData, _) = try await request("state")
+        let selection = try JSONDecoder().decode(MirrorState.self, from: selectionData)
+        try check(selection.activeID == "artboard-123-12" && selection.frames == boards.frames, "Photoshop selection changes without replacing any images")
+        _ = try await publishBoards([12], active: 12)
+        let (_, deleted) = try await request("frame/artboard-123-11")
+        try check(deleted == 404, "Deleted artboard is removed from the cache")
+        let ordinary = PushFrame(id: "123", title: "示例.psd", width: 80, height: 160, jpeg: png.base64EncodedString())
+        let (_, ordinaryStatus) = try await pluginRequest("push", token: pluginSession.key, method: "POST", body: JSONEncoder().encode(ordinary))
+        let (ordinaryData, _) = try await request("state")
+        let ordinaryState = try JSONDecoder().decode(MirrorState.self, from: ordinaryData)
+        try check(ordinaryStatus == 200 && ordinaryState.activeID == "live-123" && ordinaryState.frames.filter { $0.title == "示例.psd" }.map(\.id) == ["live-123"],
+                  "Removing all artboards restores the ordinary PSD preview")
         try await Task.sleep(nanoseconds: 100_000_000)
         try makePSD(width: 80, height: 160, red: 190).write(to: fixture, options: .atomic)
         try await Task.sleep(nanoseconds: 1_000_000_000)

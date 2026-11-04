@@ -25,7 +25,10 @@ final class MirrorServer: ObservableObject {
     private var clients: [UUID: NWConnection] = [:]
     private var lastPluginActivity = Date.distantPast
     private var lastAddressRefresh = Date.distantPast
+    private let defaults: UserDefaults
     private enum Channel { case phone, plugin }
+
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
     func start() {
         guard listener == nil else { return }
@@ -66,7 +69,7 @@ final class MirrorServer: ObservableObject {
             timer.resume()
             self.timer = timer
             addresses = Self.localAddresses()
-            let remembered = UserDefaults.standard.stringArray(forKey: "mirror.psdPaths") ?? []
+            let remembered = defaults.stringArray(forKey: "mirror.psdPaths") ?? []
             if !remembered.isEmpty { add(urls: remembered.map { URL(fileURLWithPath: $0) }) }
         } catch { message = error.localizedDescription }
     }
@@ -87,7 +90,7 @@ final class MirrorServer: ObservableObject {
                 } else if url.pathExtension.lowercased() == "psd" { newFiles.append(url) }
             }
             for url in newFiles where !self.watched.contains(url) { self.watched.append(url) }
-            UserDefaults.standard.set(self.watched.map(\.path), forKey: "mirror.psdPaths")
+            self.defaults.set(self.watched.map(\.path), forKey: "mirror.psdPaths")
             self.refreshFiles()
         }
     }
@@ -123,7 +126,8 @@ final class MirrorServer: ObservableObject {
                 let (data, width, height) = try Self.renderPSD(url)
                 let id = "file-" + SHA256.hash(data: Data(url.path.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
                 let version = SHA256.hash(data: data).prefix(12).map { String(format: "%02x", $0) }.joined()
-                put(MirrorFrame(id: id, title: url.lastPathComponent, version: version, width: width, height: height, source: "已保存 PSD"), data: data)
+                put(MirrorFrame(id: id, title: url.lastPathComponent, version: version, width: width, height: height, source: "已保存 PSD"),
+                    data: data, activate: activeID?.hasPrefix("artboard-") != true)
                 signatures[url] = signature
             } catch {
                 DispatchQueue.main.async { self.message = "\(url.lastPathComponent)：\(error.localizedDescription)" }
@@ -157,22 +161,48 @@ final class MirrorServer: ObservableObject {
         return (output as Data, width, height)
     }
 
-    private func put(_ frame: MirrorFrame, data: Data) {
+    private func put(_ frame: MirrorFrame, data: Data, activate: Bool = true) {
         // Bound retained previews so a long Photoshop session cannot grow without limit.
         if stored[frame.id] == nil { order.append(frame.id) }
         stored[frame.id] = (frame, data)
-        while order.count > 1 && (order.count > 32 || stored.values.reduce(0, { $0 + $1.1.count }) > 256 * 1024 * 1024) {
-            let old = order.removeFirst()
-            stored.removeValue(forKey: old)
+        if activate { activeID = frame.id }
+        while order.count > 1 && (order.count > 64 || stored.values.reduce(0, { $0 + $1.1.count }) > 256 * 1024 * 1024) {
+            guard let index = order.firstIndex(where: { $0 != activeID && $0 != frame.id }) else { break }
+            stored.removeValue(forKey: order.remove(at: index))
         }
-        activeID = frame.id
+        publishFrames(message: "已更新：\(frame.previewTitle)")
+    }
+
+    private func publishFrames(message: String? = nil) {
         let snapshot = order.compactMap { stored[$0]?.0 }
-        DispatchQueue.main.async { self.frames = snapshot; self.message = "已更新：\(frame.title)" }
+        DispatchQueue.main.async {
+            self.frames = snapshot
+            if let message { self.message = message }
+        }
+    }
+
+    private func removeFrames(where shouldRemove: (String) -> Bool) {
+        order.removeAll { id in
+            guard shouldRemove(id) else { return false }
+            stored.removeValue(forKey: id)
+            if activeID == id { activeID = nil }
+            return true
+        }
+    }
+
+    private static func artboardPrefix(_ documentID: String) -> String { "artboard-\(documentID)-" }
+    private static func validDocumentID(_ id: String) -> Bool {
+        guard let number = Int(id) else { return false }
+        return number > 0 && String(number) == id
     }
 
     private static func decodePush(_ body: Data) -> (MirrorFrame, Data)? {
-        guard let push = try? JSONDecoder().decode(PushFrame.self, from: body),
-              push.title.lowercased().hasSuffix(".psd"), !push.id.isEmpty, push.id.utf8.count <= 256,
+        guard let push = try? JSONDecoder().decode(PushFrame.self, from: body) else { return nil }
+        return decodePush(push)
+    }
+
+    private static func decodePush(_ push: PushFrame) -> (MirrorFrame, Data)? {
+        guard push.title.lowercased().hasSuffix(".psd"), !push.id.isEmpty, push.id.utf8.count <= 256,
               push.width > 0, push.height > 0, push.width <= 300000, push.height <= 300000,
               let data = Data(base64Encoded: push.jpeg), data.count <= 32 * 1024 * 1024,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -260,8 +290,40 @@ final class MirrorServer: ObservableObject {
             guard let (frame, image) = Self.decodePush(body) else { reply(connection, id: id, status: 400); return }
             lastPluginActivity = Date()
             DispatchQueue.main.async { self.pluginStatus = "Photoshop 已连接" }
+            let prefix = Self.artboardPrefix(String(frame.id.dropFirst(5)))
+            removeFrames { $0.hasPrefix(prefix) }
             put(frame, data: image)
             reply(connection, id: id, status: 200, type: "application/json", data: Data("{\"ok\":true}".utf8))
+        } else if method == "POST", target == "/artboard" {
+            guard let push = try? JSONDecoder().decode(PushArtboard.self, from: body),
+                  Self.validDocumentID(push.document.id), push.layerID > 0,
+                  !push.name.isEmpty, push.name.utf8.count <= 4096,
+                  let (decoded, image) = Self.decodePush(push.document) else {
+                reply(connection, id: id, status: 400); return
+            }
+            var frame = decoded
+            frame.id = Self.artboardPrefix(push.document.id) + String(push.layerID)
+            frame.artboardName = push.name
+            lastPluginActivity = Date()
+            put(frame, data: image, activate: false)
+            reply(connection, id: id, status: 200, type: "application/json", data: Data("{\"ok\":true}".utf8))
+        } else if method == "POST", target == "/artboards" {
+            guard let update = try? JSONDecoder().decode(PluginArtboards.self, from: body),
+                  Self.validDocumentID(update.documentID), update.layerIDs.count <= 64,
+                  Set(update.layerIDs).count == update.layerIDs.count, update.layerIDs.allSatisfy({ $0 > 0 }),
+                  update.layerIDs.contains(update.activeLayerID) else {
+                reply(connection, id: id, status: 400); return
+            }
+            let prefix = Self.artboardPrefix(update.documentID)
+            let ids = Set(update.layerIDs.map { prefix + String($0) })
+            removeFrames { $0 == "live-" + update.documentID || ($0.hasPrefix(prefix) && !ids.contains($0)) }
+            let selected = prefix + String(update.activeLayerID)
+            if stored[selected] != nil { activeID = selected }
+            if activeID == nil { activeID = order.first }
+            lastPluginActivity = Date()
+            publishFrames()
+            let state = PluginArtboardState(missingLayerIDs: update.layerIDs.filter { stored[prefix + String($0)] == nil })
+            reply(connection, id: id, status: 200, type: "application/json", data: (try? JSONEncoder().encode(state)) ?? Data())
         } else { reply(connection, id: id, status: 404) }
     }
 

@@ -7,6 +7,9 @@ struct MirrorFrame: Codable, Identifiable, Equatable {
     var width: Int
     var height: Int
     var source: String
+    var artboardName: String? = nil
+
+    var previewTitle: String { artboardName.map { "\($0) · \(title)" } ?? title }
 }
 
 struct MirrorState: Codable {
@@ -21,6 +24,22 @@ struct PushFrame: Codable {
     var width: Int
     var height: Int
     var jpeg: String
+}
+
+struct PushArtboard: Codable {
+    var document: PushFrame
+    var layerID: Int
+    var name: String
+}
+
+struct PluginArtboards: Codable {
+    var documentID: String
+    var layerIDs: [Int]
+    var activeLayerID: Int
+}
+
+struct PluginArtboardState: Codable {
+    var missingLayerIDs: [Int]
 }
 
 struct PluginSession: Codable {

@@ -38,7 +38,7 @@ struct PSDMirrorMacApp: App {
                     HStack {
                         Image(systemName: frame.source.contains("实时") ? "bolt.horizontal.circle" : "doc.richtext").foregroundStyle(.cyan)
                         VStack(alignment: .leading) {
-                            Text(frame.title).lineLimit(1)
+                            Text(frame.previewTitle).lineLimit(1)
                             Text("\(frame.width) × \(frame.height) · \(frame.source)").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
