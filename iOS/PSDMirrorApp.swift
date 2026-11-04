@@ -11,6 +11,8 @@ struct ConnectionView: View {
     @State private var showLibrary = false
     @State private var showScanner = false
     @State private var pendingPairing: MirrorPairing?
+    @State private var managing = false
+    @State private var markedIDs: Set<String> = []
 
     init(client: MirrorClient) { _client = StateObject(wrappedValue: client) }
 
@@ -24,6 +26,10 @@ struct ConnectionView: View {
             }
         }
         .onChange(of: scenePhase) { _, value in client.setActive(value == .active) }
+        .onChange(of: client.frames.map(\.id)) { _, ids in
+            markedIDs.formIntersection(ids)
+            if ids.isEmpty { endManagement() }
+        }
         .sheet(isPresented: $showScanner, onDismiss: {
             if let pairing = pendingPairing {
                 pendingPairing = nil
@@ -40,7 +46,10 @@ struct ConnectionView: View {
                               onClose: { client.showViewer = false },
                               onLibrary: { showLibrary = true })
                 .ignoresSafeArea().statusBarHidden()
-                .sheet(isPresented: $showLibrary) { library }
+                .sheet(isPresented: $showLibrary, onDismiss: {
+                    endManagement()
+                    if client.frames.isEmpty { client.showViewer = false }
+                }) { library }
         }
     }
 
@@ -74,6 +83,7 @@ struct ConnectionView: View {
                 HStack {
                     Text("PSD Mirror").font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
                     Spacer()
+                    if managing || !client.frames.isEmpty { managementButton }
                     connectionMenu
                 }
                 VStack(alignment: .leading, spacing: 10) {
@@ -94,13 +104,14 @@ struct ConnectionView: View {
                     }
                 }
             }.padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 24)
+            if managing { managementBar }
             framesList
         }
     }
 
     private var connectionMenu: some View {
         Menu {
-            Toggle("跟随 Mac 当前画面", isOn: $client.followActive)
+            previewMenuItems
             Divider()
             Button("重新扫码", systemImage: "qrcode.viewfinder", action: scan)
             Button("断开连接", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
@@ -112,13 +123,49 @@ struct ConnectionView: View {
         }.accessibilityLabel("连接与同步选项")
     }
 
+    @ViewBuilder private var previewMenuItems: some View {
+        Toggle("跟随 Mac 当前画面", isOn: $client.followActive)
+        if client.hasRemovedFrames {
+            Button("恢复已删除条目", systemImage: "arrow.uturn.backward") { client.restoreRemovedFrames() }
+        }
+    }
+
+    private var managementButton: some View {
+        Button(managing ? "完成" : "管理") {
+            if managing { endManagement() }
+            else { managing = true }
+        }
+        .font(.subheadline.weight(.medium))
+        .tint(.cyan)
+    }
+
+    private var managementBar: some View {
+        let ids = Set(client.frames.map(\.id))
+        let allMarked = !ids.isEmpty && markedIDs == ids
+        return HStack {
+            Button(allMarked ? "取消全选" : "全选") { markedIDs = allMarked ? [] : ids }
+                .tint(.cyan)
+                .disabled(ids.isEmpty)
+            Spacer()
+            Button(markedIDs.isEmpty ? "删除" : "删除 \(markedIDs.count) 项", role: .destructive) {
+                client.removeFrames(markedIDs)
+                endManagement()
+            }
+            .tint(.red)
+            .disabled(markedIDs.isEmpty)
+        }
+        .font(.subheadline.weight(.medium))
+        .buttonStyle(.bordered)
+        .padding(.horizontal, 24).padding(.bottom, 12)
+    }
+
     private var framesList: some View {
         Group {
             if client.frames.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "doc.richtext").font(.system(size: 32, weight: .light)).padding(.bottom, 4)
-                    Text("还没有 PSD 画面").font(.subheadline.weight(.medium))
-                    Text("在 Mac 添加 PSD，或开启 Photoshop 实时同步。")
+                    Text(client.allFramesRemoved ? "列表已清空" : "还没有 PSD 画面").font(.subheadline.weight(.medium))
+                    Text(client.allFramesRemoved ? "可以在「…」中恢复已删除条目。" : "在 Mac 添加 PSD，或开启 Photoshop 实时同步。")
                         .font(.caption).multilineTextAlignment(.center)
                 }.foregroundStyle(.secondary).padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -126,11 +173,19 @@ struct ConnectionView: View {
                     LazyVStack(spacing: 10) {
                         ForEach(client.frames) { frame in
                             Button {
-                                client.choose(frame)
-                                showLibrary = false
+                                if managing {
+                                    if markedIDs.remove(frame.id) == nil { markedIDs.insert(frame.id) }
+                                } else {
+                                    client.choose(frame)
+                                    showLibrary = false
+                                }
                             } label: {
-                                PSDFileRow(frame: frame, selected: client.selectedID == frame.id)
-                            }.buttonStyle(.plain)
+                                PSDFileRow(frame: frame,
+                                           selected: managing ? markedIDs.contains(frame.id) : client.selectedID == frame.id,
+                                           managing: managing)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(managing && markedIDs.contains(frame.id) ? .isSelected : [])
                         }
                     }.padding(.horizontal, 20).padding(.bottom, 24)
                 }.scrollIndicators(.hidden)
@@ -140,30 +195,43 @@ struct ConnectionView: View {
 
     private var library: some View {
         NavigationStack {
-            framesList
+            VStack(spacing: 0) {
+                if managing { managementBar.padding(.top, 8) }
+                framesList
+            }
                 .background(Color(red: 0.035, green: 0.045, blue: 0.055))
                 .navigationTitle("PSD 画面").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Menu {
-                            Toggle("跟随 Mac 当前画面", isOn: $client.followActive)
+                            previewMenuItems
                         } label: { Image(systemName: "ellipsis") }
                         .accessibilityLabel("同步选项")
                     }
-                    ToolbarItem(placement: .confirmationAction) { Button("完成") { showLibrary = false } }
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        if managing || !client.frames.isEmpty { managementButton }
+                        Button("关闭") { showLibrary = false }
+                    }
                 }
         }.preferredColorScheme(.dark)
     }
 
     private func scan() {
+        endManagement()
         client.disconnect()
         showScanner = true
+    }
+
+    private func endManagement() {
+        managing = false
+        markedIDs.removeAll()
     }
 }
 
 private struct PSDFileRow: View {
     let frame: MirrorFrame
     let selected: Bool
+    let managing: Bool
     private var live: Bool { frame.source.contains("实时") }
 
     var body: some View {
@@ -191,9 +259,10 @@ private struct PSDFileRow: View {
                     }
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: selected ? "checkmark.circle.fill" : "chevron.right")
-                .font(.system(size: selected ? 16 : 11, weight: .medium))
+            Image(systemName: managing ? (selected ? "checkmark.square.fill" : "square") : (selected ? "checkmark.circle.fill" : "chevron.right"))
+                .font(.system(size: managing || selected ? 16 : 11, weight: .medium))
                 .foregroundStyle(selected ? Color.cyan.opacity(0.8) : Color.white.opacity(0.2))
+                .accessibilityHidden(true)
         }.padding(16)
             .background(.white.opacity(selected ? 0.06 : 0.035), in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(selected ? 0.1 : 0.035)))
